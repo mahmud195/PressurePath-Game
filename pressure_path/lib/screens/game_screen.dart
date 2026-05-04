@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 
 class GameScreen extends StatefulWidget {
   final TrailPath? customTrail;
+  static double globalTolerance = 35.0;
 
   const GameScreen({super.key, this.customTrail});
 
@@ -38,9 +39,6 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     super.initState();
     if (widget.customTrail != null) {
       _selectedPath = 'custom';
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _startPlaying();
-      });
     }
   }
 
@@ -201,7 +199,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     }
 
     // Fail if went off the path
-    if (minD > 35) {
+    if (minD > GameScreen.globalTolerance) {
       _triggerFail(reason: I18n.t('offTrack'));
       return;
     }
@@ -315,39 +313,60 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(I18n.t('choosePath'),
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: types.map((t) {
-              final selected = t == _selectedPath;
-              return GestureDetector(
-                onTap: () => setState(() => _selectedPath = t),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  width: 80,
-                  height: 80,
-                  margin: const EdgeInsets.symmetric(horizontal: 6),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: selected ? AppColors.accent : Colors.transparent,
-                      width: 2,
+          if (widget.customTrail == null) ...[
+            Text(I18n.t('choosePath'),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: types.map((t) {
+                final selected = t == _selectedPath;
+                return GestureDetector(
+                  onTap: () => setState(() => _selectedPath = t),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 80,
+                    height: 80,
+                    margin: const EdgeInsets.symmetric(horizontal: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: selected ? AppColors.accent : Colors.transparent,
+                        width: 2,
+                      ),
+                      boxShadow: selected
+                          ? [BoxShadow(color: AppColors.accent.withValues(alpha: 0.3), blurRadius: 16)]
+                          : null,
                     ),
-                    boxShadow: selected
-                        ? [BoxShadow(color: AppColors.accent.withValues(alpha: 0.3), blurRadius: 16)]
-                        : null,
+                    child: CustomPaint(
+                      painter: _PathPreviewPainter(t),
+                    ),
                   ),
-                  child: CustomPaint(
-                    painter: _PathPreviewPainter(t),
-                  ),
-                ),
-              );
-            }).toList(),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 24),
+          ],
+          
+          Text(I18n.t('precision'),
+              style: const TextStyle(fontSize: 14, color: AppColors.muted)),
+          SizedBox(
+            width: 200,
+            child: Slider(
+              value: GameScreen.globalTolerance,
+              min: 15,
+              max: 60,
+              activeColor: AppColors.accent,
+              onChanged: (v) => setState(() => GameScreen.globalTolerance = v),
+            ),
           ),
-          const SizedBox(height: 20),
+          Text(
+            GameScreen.globalTolerance < 25 ? I18n.t('strict') : GameScreen.globalTolerance > 45 ? I18n.t('relaxed') : I18n.t('normal'),
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 24),
+
           ElevatedButton(
             onPressed: _startPlaying,
             child: Text(I18n.t('startTrace')),

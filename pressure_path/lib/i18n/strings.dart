@@ -80,6 +80,10 @@ class I18n {
       'zigzag': 'Zigzag',
       'spiral': 'Spiral',
       'offTrack': 'You went off track!',
+      'precision': 'Tracing Precision',
+      'strict': 'Strict (Exact)',
+      'relaxed': 'Relaxed (Forgiving)',
+      'normal': 'Normal',
     },
     'ar': {
       'appName': 'مسار الهدوء',
@@ -159,6 +163,10 @@ class I18n {
       'zigzag': 'متعرج',
       'spiral': 'حلزوني',
       'offTrack': 'لقد خرجت عن المسار!',
+      'precision': 'دقة الرسم',
+      'strict': 'صارم (بالضبط)',
+      'relaxed': 'مرن (يسمح بأخطاء)',
+      'normal': 'عادي',
     },
   };
 
