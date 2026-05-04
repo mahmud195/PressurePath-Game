@@ -79,6 +79,7 @@ class I18n {
       'wave': 'Wave',
       'zigzag': 'Zigzag',
       'spiral': 'Spiral',
+      'offTrack': 'You went off track!',
     },
     'ar': {
       'appName': 'مسار الهدوء',
@@ -157,6 +158,7 @@ class I18n {
       'wave': 'موجة',
       'zigzag': 'متعرج',
       'spiral': 'حلزوني',
+      'offTrack': 'لقد خرجت عن المسار!',
     },
   };
 

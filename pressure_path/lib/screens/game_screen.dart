@@ -71,14 +71,15 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     });
   }
 
-  void _triggerFail() {
+  void _triggerFail({String? reason}) {
     setState(() => _state = _GameState.failed);
     final msgs = I18n.empathyMessages;
     final msg = msgs[Random().nextInt(msgs.length)];
+    final fullMsg = reason != null ? '$reason\n$msg' : msg;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg, textAlign: TextAlign.center),
+        content: Text(fullMsg, textAlign: TextAlign.center),
         backgroundColor: AppColors.surface,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -196,6 +197,12 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     // Fail if pressure exceeds threshold
     if (p100 >= _threshold) {
       _triggerFail();
+      return;
+    }
+
+    // Fail if went off the path
+    if (minD > 35) {
+      _triggerFail(reason: I18n.t('offTrack'));
       return;
     }
 
