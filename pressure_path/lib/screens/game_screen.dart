@@ -164,12 +164,24 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (_state != _GameState.playing || !_isDrawing || _pathPoints.isEmpty) return;
 
     final pos = e.localPosition;
-    double rawPressure;
-    if (e.pressure > 0 && e.pressure < 1.0) {
-      rawPressure = e.pressure;
+    
+    // Check if device supports true hardware pressure
+    bool hasHardwarePressure = e.pressureMax > e.pressureMin;
+    double rawPressure = 0.0;
+
+    if (hasHardwarePressure) {
+      // Hardware supports pressure (e.g., Apple Pencil, some Android styluses/phones).
+      rawPressure = ((e.pressure - e.pressureMin) / (e.pressureMax - e.pressureMin)).clamp(0.0, 1.0);
     } else {
+      // Hardware does NOT support true pressure. Fall back to touch area.
       final area = e.radiusMinor * e.radiusMajor;
-      rawPressure = (area / 400).clamp(0.0, 1.0);
+      if (area > 0) {
+        // Typical finger area is around 100-300. As it presses harder, it flattens and area increases.
+        rawPressure = (area / 400).clamp(0.0, 1.0);
+      } else {
+        // Absolute fallback (e.g. basic touch on iOS Safari without size support).
+        rawPressure = 0.25;
+      }
     }
 
     _smoothPressure += (rawPressure * 100 - _smoothPressure) * 0.3;
