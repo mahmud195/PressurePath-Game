@@ -6,7 +6,7 @@
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="PressurePath — Learn calm, one trace at a time">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -22,7 +22,19 @@
   <link rel="manifest" href="manifest.json">
 
   <style>
-    html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; background: #0f172a; }
+    html, body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #0f172a;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+    }
     /* Loading indicator */
     .loading-wrap {
       position: fixed; inset: 0; display: flex; flex-direction: column;
@@ -36,35 +48,71 @@
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
       background-clip: text; margin-bottom: 24px;
     }
+    .loading-sub { color: #94a3b8; font-size: 14px; margin-bottom: 20px; }
     .spinner {
       width: 36px; height: 36px; border: 3px solid rgba(99,102,241,0.2);
       border-top-color: #6366f1; border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .error-msg { color: #ef4444; font-size: 14px; margin-top: 20px; text-align: center; max-width: 300px; display: none; }
   </style>
 </head>
 <body>
   <div id="loading" class="loading-wrap">
     <h1>PressurePath</h1>
+    <p class="loading-sub">Loading...</p>
     <div class="spinner"></div>
+    <p id="error-msg" class="error-msg"></p>
   </div>
+
+  <script>
+    // Error handler for iOS
+    window.addEventListener('error', function(e) {
+      var errDiv = document.getElementById('error-msg');
+      if (errDiv) {
+        errDiv.style.display = 'block';
+        errDiv.textContent = 'Error: ' + (e.message || 'Unknown error') + '. Try refreshing the page.';
+      }
+    });
+
+    window.addEventListener('unhandledrejection', function(e) {
+      var errDiv = document.getElementById('error-msg');
+      if (errDiv) {
+        errDiv.style.display = 'block';
+        errDiv.textContent = 'Loading error. Try refreshing or using a different browser.';
+      }
+    });
+  </script>
 
   <script>
     {{flutter_js}}
     {{flutter_build_config}}
 
     _flutter.loader.load({
+      config: {
+        // Force canvaskit variant that works better on iOS Safari
+        canvasKitVariant: "full",
+      },
       onEntrypointLoaded: async function(engineInitializer) {
-        const appRunner = await engineInitializer.initializeEngine({
-          useColorEmoji: true,
-        });
+        try {
+          const appRunner = await engineInitializer.initializeEngine({
+            useColorEmoji: true,
+          });
 
-        // Hide loading screen
-        const loading = document.getElementById('loading');
-        if (loading) loading.style.display = 'none';
+          // Hide loading screen
+          var loading = document.getElementById('loading');
+          if (loading) loading.style.display = 'none';
 
-        await appRunner.runApp();
+          await appRunner.runApp();
+        } catch (e) {
+          var errDiv = document.getElementById('error-msg');
+          if (errDiv) {
+            errDiv.style.display = 'block';
+            errDiv.textContent = 'App failed to start: ' + e.toString();
+          }
+          console.error('Flutter initialization error:', e);
+        }
       }
     });
   </script>

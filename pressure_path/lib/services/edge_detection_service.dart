@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
@@ -13,20 +12,7 @@ class EdgeDetectionResult {
 }
 
 class EdgeDetectionService {
-  static Future<EdgeDetectionResult> detect(
-    File imageFile, {
-    double highThreshold = 0.20,
-    int minPathLength = 15,
-  }) async {
-    final bytes = await imageFile.readAsBytes();
-    final result = await compute(_detectInIsolate, {
-      'bytes': bytes,
-      'highThreshold': highThreshold,
-      'minPathLength': minPathLength,
-    });
-    return result;
-  }
-
+  /// Detect edges from raw image bytes (works on ALL platforms including web).
   static Future<EdgeDetectionResult> detectFromBytes(
     Uint8List bytes, {
     double highThreshold = 0.20,

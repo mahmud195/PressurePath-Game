@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,7 +18,6 @@ class ImageCaptureScreen extends StatefulWidget {
 class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
   final ImagePicker _picker = ImagePicker();
   Uint8List? _imageBytes;
-  File? _imageFile;
   bool _isProcessing = false;
   EdgeDetectionResult? _detectionResult;
   double _sensitivity = 0.20;
@@ -29,11 +27,10 @@ class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
     final xFile = await _picker.pickImage(source: source, maxWidth: 1200, maxHeight: 1200);
     if (xFile == null) return;
 
-    final file = File(xFile.path);
-    final bytes = await file.readAsBytes();
+    // Use readAsBytes() instead of File — works on web and native
+    final bytes = await xFile.readAsBytes();
 
     setState(() {
-      _imageFile = file;
       _imageBytes = bytes;
       _detectionResult = null;
     });
@@ -42,12 +39,12 @@ class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
   }
 
   Future<void> _runDetection() async {
-    if (_imageFile == null) return;
+    if (_imageBytes == null) return;
     setState(() => _isProcessing = true);
 
     try {
-      final result = await EdgeDetectionService.detect(
-        _imageFile!,
+      final result = await EdgeDetectionService.detectFromBytes(
+        _imageBytes!,
         highThreshold: _sensitivity,
         minPathLength: 15,
       );
@@ -302,7 +299,6 @@ class _ImageCaptureScreenState extends State<ImageCaptureScreen> {
                   onPressed: () {
                     setState(() {
                       _imageBytes = null;
-                      _imageFile = null;
                       _detectionResult = null;
                     });
                   },
