@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 class GameScreen extends StatefulWidget {
   final TrailPath? customTrail;
   static double globalTolerance = 35.0;
+  static double globalStrokeWidth = 6.0;
 
   const GameScreen({super.key, this.customTrail});
 
@@ -355,14 +356,32 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             width: 200,
             child: Slider(
               value: GameScreen.globalTolerance,
-              min: 15,
+              min: 2,
               max: 60,
               activeColor: AppColors.accent,
               onChanged: (v) => setState(() => GameScreen.globalTolerance = v),
             ),
           ),
           Text(
-            GameScreen.globalTolerance < 25 ? I18n.t('strict') : GameScreen.globalTolerance > 45 ? I18n.t('relaxed') : I18n.t('normal'),
+            GameScreen.globalTolerance < 10 ? I18n.t('strict') : GameScreen.globalTolerance > 45 ? I18n.t('relaxed') : I18n.t('normal'),
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 16),
+
+          Text(I18n.t('thickness'),
+              style: const TextStyle(fontSize: 14, color: AppColors.muted)),
+          SizedBox(
+            width: 200,
+            child: Slider(
+              value: GameScreen.globalStrokeWidth,
+              min: 2,
+              max: 24,
+              activeColor: AppColors.trailYellow,
+              onChanged: (v) => setState(() => GameScreen.globalStrokeWidth = v),
+            ),
+          ),
+          Text(
+            '${GameScreen.globalStrokeWidth.round()} px',
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 24),
@@ -474,7 +493,7 @@ class _GameCanvasPainter extends CustomPainter {
       final cur = userTrail[i];
       final trailPaint = Paint()
         ..color = cur.color
-        ..strokeWidth = 4
+        ..strokeWidth = GameScreen.globalStrokeWidth
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(prev.position, cur.position, trailPaint);
     }
