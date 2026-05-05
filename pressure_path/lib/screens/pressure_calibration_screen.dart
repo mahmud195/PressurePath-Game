@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../models/pressure_calibration.dart';
@@ -93,13 +94,22 @@ class _PressureCalibrationScreenState extends State<PressureCalibrationScreen> {
     if (_saving) return;
     setState(() => _saving = true);
 
-    final normalNormalized = _normalSamples
-        .map((sample) => sample.normalized)
-        .toList();
-    final firmNormalized = _firmSamples
-        .map((sample) => sample.normalized)
-        .toList();
+    final allSamples = [..._normalSamples, ..._firmSamples];
+    final allRaw = allSamples.map((sample) => sample.raw).toList();
+    final hasOutOfRangeRaw = allSamples.any(
+      (sample) => sample.rawOutsideEventRange,
+    );
+    final allGenericTouch = allSamples.every((sample) => sample.isGenericTouch);
+    final minRaw = allRaw.reduce(math.min);
+    final maxRaw = allRaw.reduce(math.max);
+    final normalNormalized = hasOutOfRangeRaw
+        ? _normalizeRawSamples(_normalSamples, minRaw, maxRaw)
+        : _normalSamples.map((sample) => sample.normalized).toList();
+    final firmNormalized = hasOutOfRangeRaw
+        ? _normalizeRawSamples(_firmSamples, minRaw, maxRaw)
+        : _firmSamples.map((sample) => sample.normalized).toList();
     final supportsPressure =
+        !allGenericTouch &&
         PressureInputService.calibrationSamplesSupportPressure(
           normalSamples: normalNormalized,
           firmSamples: firmNormalized,
@@ -119,10 +129,6 @@ class _PressureCalibrationScreenState extends State<PressureCalibrationScreen> {
     }
 
     final normalRaw = _normalSamples.map((sample) => sample.raw).toList();
-    final firmRaw = _firmSamples.map((sample) => sample.raw).toList();
-    final allRaw = [...normalRaw, ...firmRaw];
-    final minRaw = normalRaw.reduce(math.min);
-    final maxRaw = allRaw.reduce(math.max);
     final normalAvg = _average(normalRaw);
     final spread = math.max(maxRaw - minRaw, 0.06);
     final calibratedMin = math.max(0.0, minRaw - spread * 0.15);
@@ -315,13 +321,33 @@ class _PressureCalibrationScreenState extends State<PressureCalibrationScreen> {
     if (values.isEmpty) return 0.0;
     return values.reduce((a, b) => a + b) / values.length;
   }
+
+  List<double> _normalizeRawSamples(
+    List<_PressureSample> samples,
+    double minRaw,
+    double maxRaw,
+  ) {
+    final range = maxRaw - minRaw;
+    if (range <= 0.0) return List<double>.filled(samples.length, 0.0);
+    return samples
+        .map((sample) => ((sample.raw - minRaw) / range).clamp(0.0, 1.0))
+        .map((value) => value.toDouble())
+        .toList();
+  }
 }
 
 class _PressureSample {
   final double raw;
   final double normalized;
+  final bool rawOutsideEventRange;
+  final bool isGenericTouch;
 
-  const _PressureSample({required this.raw, required this.normalized});
+  const _PressureSample({
+    required this.raw,
+    required this.normalized,
+    required this.rawOutsideEventRange,
+    required this.isGenericTouch,
+  });
 
   factory _PressureSample.fromEvent(PointerDownEvent event) {
     final raw = _finiteOr(event.pressure, 0.0);
@@ -330,7 +356,19 @@ class _PressureSample {
     final normalized = maxPressure > minPressure
         ? _clamp((raw - minPressure) / (maxPressure - minPressure), 0.0, 1.0)
         : _clamp(raw, 0.0, 1.0);
-    return _PressureSample(raw: raw, normalized: normalized);
+    final rawOutsideEventRange =
+        raw < minPressure - 0.001 || raw > maxPressure + 0.001;
+    final isGenericTouch =
+        event.kind == PointerDeviceKind.touch &&
+        (minPressure - 0.0).abs() <= 0.001 &&
+        (maxPressure - 1.0).abs() <= 0.001 &&
+        !rawOutsideEventRange;
+    return _PressureSample(
+      raw: raw,
+      normalized: normalized,
+      rawOutsideEventRange: rawOutsideEventRange,
+      isGenericTouch: isGenericTouch,
+    );
   }
 
   static double _finiteOr(double value, double fallback) {

@@ -24,12 +24,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install dependencies
+        working-directory: pressure_path
+        run: flutter pub get
+      - name: Build web
+        working-directory: pressure_path
+        run: flutter build web --release --base-href /PressurePath-Game/
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: pressure_path/build/web
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

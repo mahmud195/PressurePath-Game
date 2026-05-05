@@ -85,6 +85,28 @@ void main() {
     },
   );
 
+  testWidgets('generic Android touch readings save safe fallback mode', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: PressureCalibrationScreen()),
+    );
+    final panel = find.byKey(const Key('calibrationSampleArea'));
+
+    for (final pressure in [0.20, 0.23, 0.25, 0.74, 0.80, 0.86]) {
+      await _tapWithPressure(tester, panel, pressure: pressure);
+    }
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Your device does not support real pressure detection.'),
+      findsOneWidget,
+    );
+    final saved = await PressureInputService.loadCalibration();
+    expect(saved.isCalibrated, isTrue);
+    expect(saved.supportsPressure, isFalse);
+  });
+
   testWidgets('Skip button saves a calibrated fallback and pops the screen', (
     tester,
   ) async {

@@ -2,6 +2,7 @@
 // fallback detection, smoothing, sensitivity multiplier, state mapping,
 // and resilience to invalid/garbage pressure inputs.
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pressure_path/models/pressure_calibration.dart';
 import 'package:pressure_path/models/pressure_reading.dart';
@@ -23,7 +24,9 @@ void main() {
         service.read(event);
       }
 
-      final reading = service.read(buildPointerMoveEvent(pressure: 0.5));
+      final reading = service.read(
+        buildPointerMoveEvent(pressure: 0.5, kind: PointerDeviceKind.stylus),
+      );
       expect(reading.normalized, inInclusiveRange(0.0, 1.0));
       expect(reading.adjusted, inInclusiveRange(0.0, 1.0));
     });
@@ -105,7 +108,14 @@ void main() {
         for (final e in createSafePressureSequence(count: 8)) {
           service.read(e);
         }
-        readings.add(service.read(buildPointerMoveEvent(pressure: 0.5)));
+        readings.add(
+          service.read(
+            buildPointerMoveEvent(
+              pressure: 0.5,
+              kind: PointerDeviceKind.stylus,
+            ),
+          ),
+        );
       }
 
       expect(
@@ -152,6 +162,57 @@ void main() {
       expect(last!.isFallback, isFalse);
     });
 
+    test('generic Android touch pressure pinned high uses safe fallback', () {
+      final service = PressureInputService(
+        calibration: PressureCalibration.defaultCalibration().copyWith(
+          isCalibrated: true,
+          sensitivityMultiplier: 1.0,
+        ),
+      );
+
+      PressureReading? last;
+      for (var i = 0; i < 14; i++) {
+        last = service.read(
+          buildPointerMoveEvent(
+            pressure: 0.96,
+            pressureMin: 0.0,
+            pressureMax: 1.0,
+            position: Offset(50.0 + i * 4, 100),
+            delta: const Offset(4, 0),
+            timeStamp: Duration(milliseconds: i * 16),
+          ),
+        );
+      }
+
+      expect(last, isNotNull);
+      expect(last!.isFallback, isTrue);
+      expect(last.state, isNot(PressureState.tooStrong));
+      expect(
+        last.adjusted,
+        lessThan(service.calibration.failPressureThreshold),
+      );
+    });
+
+    test('fallback touch estimate fills the gauge from contact size', () {
+      final service = PressureInputService(
+        calibration: PressureCalibration.fallbackCalibration(),
+      );
+
+      final reading = service.read(
+        buildPointerMoveEvent(
+          pressure: 1.0,
+          pressureMin: 1.0,
+          pressureMax: 1.0,
+          radiusMajor: 22.0,
+          radiusMinor: 22.0,
+        ),
+      );
+
+      expect(reading.isFallback, isTrue);
+      expect(reading.adjusted, greaterThan(0.75));
+      expect(reading.state, isNot(PressureState.safe));
+    });
+
     test('uncalibrated state forces fallback regardless of inputs', () {
       // defaultCalibration().isCalibrated == false
       final service = PressureInputService(
@@ -191,7 +252,9 @@ void main() {
       service.reset();
       // After reset, the first reading isn't blended against the previous
       // one — it should equal its own one-shot input within the smooth().
-      final r = service.read(buildPointerMoveEvent(pressure: 0.5));
+      final r = service.read(
+        buildPointerMoveEvent(pressure: 0.5, kind: PointerDeviceKind.stylus),
+      );
       expect(r.adjusted, inInclusiveRange(0.0, 1.0));
     });
   });
@@ -213,6 +276,7 @@ void main() {
             position: Offset(50.0 + i * 4, 100),
             delta: const Offset(4, 0),
             timeStamp: Duration(milliseconds: i * 16),
+            kind: PointerDeviceKind.stylus,
           ),
         );
       }
@@ -226,6 +290,7 @@ void main() {
           position: const Offset(120, 100),
           delta: const Offset(4, 0),
           timeStamp: const Duration(milliseconds: 200),
+          kind: PointerDeviceKind.stylus,
         ),
       );
 
@@ -259,6 +324,7 @@ void main() {
             position: Offset(50.0 + i * 4, 100),
             delta: const Offset(4, 0),
             timeStamp: Duration(milliseconds: i * 16),
+            kind: PointerDeviceKind.stylus,
           ),
         );
       }

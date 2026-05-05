@@ -15,10 +15,13 @@ class PressureInputService {
   static const double _realPressureSpread = 0.035;
   static const double _smoothingPreviousWeight = 0.75;
   static const double _smoothingNewWeight = 0.25;
+  static const double _eventRangeEpsilon = 0.001;
 
   PressureCalibration _calibration;
   final List<double> _recentHardwareSamples = [];
   double? _previousAdjusted;
+  bool _hardwarePressureConfirmed = false;
+  DateTime? _gestureStartedAt;
   Offset? _lastPosition;
   DateTime? _lastEventAt;
   DateTime? _lastDebugLogAt;
@@ -104,6 +107,8 @@ class PressureInputService {
   void reset() {
     _recentHardwareSamples.clear();
     _previousAdjusted = null;
+    _hardwarePressureConfirmed = false;
+    _gestureStartedAt = null;
     _lastPosition = null;
     _lastEventAt = null;
     _lastDebugLogAt = null;
@@ -111,12 +116,14 @@ class PressureInputService {
 
   void endGesture() {
     _previousAdjusted = null;
+    _gestureStartedAt = null;
     _lastPosition = null;
     _lastEventAt = null;
   }
 
   PressureReading read(PointerEvent event) {
     final now = DateTime.now();
+    _gestureStartedAt ??= now;
     final raw = _finiteOr(
       event.pressure,
       _calibration.calibratedNormalPressure,
@@ -127,28 +134,34 @@ class PressureInputService {
     final eventNormalized = hasEventRange
         ? _clamp((raw - rawMin) / (rawMax - rawMin), 0.0, 1.0)
         : _clamp(raw, 0.0, 1.0);
+    final rawOutsideEventRange = _rawOutsideEventRange(raw, rawMin, rawMax);
+    final detectionNormalized = rawOutsideEventRange
+        ? _normalizeHardwarePressure(raw, rawMin, rawMax)
+        : eventNormalized;
 
-    _trackHardwareSample(eventNormalized);
+    _trackHardwareSample(detectionNormalized);
 
     final speed = _speedFor(event, now);
     final hasRealPressure = _hasUsableHardwarePressure(
       normalizedHardware: eventNormalized,
       hasEventRange: hasEventRange,
+      kind: event.kind,
+      rawOutsideEventRange: rawOutsideEventRange,
+      rawMin: rawMin,
+      rawMax: rawMax,
     );
 
     final normalized = hasRealPressure
         ? _normalizeHardwarePressure(raw, rawMin, rawMax)
-        : _simulateFallbackPressure(event, speed);
+        : _simulateFallbackPressure(event, speed, now);
     final isFallback = !hasRealPressure;
     final normalizedSafe = isFallback
-        ? _clamp(
-            normalized,
-            _calibration.minAllowedPressure,
-            _calibration.maxAllowedPressure,
-          )
+        ? _clamp(normalized, _calibration.minAllowedPressure, 1.0)
         : _clamp(normalized, 0.0, 1.0);
     final adjustedInput = _clamp(
-      normalizedSafe * _calibration.sensitivityMultiplier,
+      isFallback
+          ? normalizedSafe
+          : normalizedSafe * _calibration.sensitivityMultiplier,
       0.0,
       1.0,
     );
@@ -175,24 +188,39 @@ class PressureInputService {
   bool _hasUsableHardwarePressure({
     required double normalizedHardware,
     required bool hasEventRange,
+    required PointerDeviceKind kind,
+    required bool rawOutsideEventRange,
+    required double rawMin,
+    required double rawMax,
   }) {
     if (!_calibration.isCalibrated || !_calibration.supportsPressure) {
       return false;
     }
     if (!hasEventRange) return false;
 
+    final isTouch = kind == PointerDeviceKind.touch;
+    final genericUnitTouch =
+        isTouch &&
+        _isGenericUnitRange(rawMin, rawMax) &&
+        !rawOutsideEventRange &&
+        !_calibrationUsesNonUnitRange(rawMin, rawMax);
+    if (genericUnitTouch) return false;
+
     if (_recentHardwareSamples.length < _minRealPressureSamples) {
-      return !_looksLikeDefaultPressure(normalizedHardware);
+      final usable = !isTouch && !_looksLikeDefaultPressure(normalizedHardware);
+      if (usable) _hardwarePressureConfirmed = true;
+      return usable;
     }
 
-    if (samplesShowRealPressure(_recentHardwareSamples)) return true;
+    if (samplesShowRealPressure(_recentHardwareSamples)) {
+      _hardwarePressureConfirmed = true;
+      return true;
+    }
 
-    final minValue = _recentHardwareSamples.reduce(math.min);
-    final maxValue = _recentHardwareSamples.reduce(math.max);
-    final constantDefault =
-        maxValue - minValue < 0.01 &&
-        _recentHardwareSamples.every(_looksLikeDefaultPressure);
-    return !constantDefault;
+    if (_hardwarePressureConfirmed && !isTouch) {
+      return !_recentHardwareSamples.every(_looksLikeDefaultPressure);
+    }
+    return false;
   }
 
   double _normalizeHardwarePressure(
@@ -210,23 +238,37 @@ class PressureInputService {
     return _clamp((raw - minPressure) / (maxPressure - minPressure), 0.0, 1.0);
   }
 
-  double _simulateFallbackPressure(PointerEvent event, double? speedPxPerMs) {
+  double _simulateFallbackPressure(
+    PointerEvent event,
+    double? speedPxPerMs,
+    DateTime now,
+  ) {
     final speed = speedPxPerMs ?? 0.55;
     final slowFactor = 1.0 - _clamp(speed / 1.35, 0.0, 1.0);
-    var simulated = 0.32 + slowFactor * 0.18;
+    final holdMs = _gestureStartedAt == null
+        ? 0
+        : now.difference(_gestureStartedAt!).inMilliseconds;
+    final holdSignal = _clamp(holdMs / 900.0, 0.0, 1.0);
+    var simulated =
+        0.28 +
+        slowFactor * 0.20 +
+        _contactSignalFor(event) * 0.48 +
+        holdSignal * 0.10;
 
-    final radiusMajor = _finiteOr(event.radiusMajor, 0.0);
-    final radiusMinor = _finiteOr(event.radiusMinor, 0.0);
+    return _clamp(simulated, 0.24, 0.98);
+  }
+
+  double _contactSignalFor(PointerEvent event) {
+    final radiusMajor = _finiteOr(event.radiusMajor, 0.0).abs();
+    final radiusMinor = _finiteOr(event.radiusMinor, 0.0).abs();
     if (radiusMajor > 0 && radiusMinor > 0) {
       final area = radiusMajor * radiusMinor;
-      final areaSignal = _clamp((area - 40.0) / 310.0, 0.0, 1.0);
-      simulated += areaSignal * 0.06;
-    } else if (radiusMajor > 0) {
-      final radiusSignal = _clamp((radiusMajor - 5.0) / 25.0, 0.0, 1.0);
-      simulated += radiusSignal * 0.04;
+      final effectiveRadius = math.sqrt(area);
+      return _clamp((effectiveRadius - 5.0) / 17.0, 0.0, 1.0);
     }
-
-    return _clamp(simulated, 0.30, 0.56);
+    if (radiusMajor > 0) return _clamp((radiusMajor - 5.0) / 24.0, 0.0, 1.0);
+    if (radiusMinor > 0) return _clamp((radiusMinor - 5.0) / 24.0, 0.0, 1.0);
+    return 0.0;
   }
 
   PressureState _stateFor(double adjustedPressure) {
@@ -272,6 +314,20 @@ class PressureInputService {
     return normalizedHardware <= 0.001 ||
         normalizedHardware >= 0.999 ||
         (normalizedHardware - 0.5).abs() <= 0.001;
+  }
+
+  bool _rawOutsideEventRange(double raw, double min, double max) {
+    return raw < min - _eventRangeEpsilon || raw > max + _eventRangeEpsilon;
+  }
+
+  bool _isGenericUnitRange(double min, double max) {
+    return (min - 0.0).abs() <= _eventRangeEpsilon &&
+        (max - 1.0).abs() <= _eventRangeEpsilon;
+  }
+
+  bool _calibrationUsesNonUnitRange(double eventMin, double eventMax) {
+    return _calibration.calibratedMinPressure < eventMin - 0.05 ||
+        _calibration.calibratedMaxPressure > eventMax + 0.05;
   }
 
   void _debugLog(PressureReading reading) {

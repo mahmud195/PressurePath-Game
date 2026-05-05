@@ -52,6 +52,7 @@ PointerDownEvent buildPointerDownEvent({
   Offset position = const Offset(100, 100),
   Duration timeStamp = Duration.zero,
   int pointer = 1,
+  PointerDeviceKind kind = PointerDeviceKind.touch,
   double radiusMajor = 0.0,
   double radiusMinor = 0.0,
 }) {
@@ -59,6 +60,7 @@ PointerDownEvent buildPointerDownEvent({
     timeStamp: timeStamp,
     pointer: pointer,
     position: position,
+    kind: kind,
     pressure: pressure,
     pressureMin: pressureMin,
     pressureMax: pressureMax,
@@ -76,6 +78,7 @@ PointerMoveEvent buildPointerMoveEvent({
   Offset delta = Offset.zero,
   Duration timeStamp = Duration.zero,
   int pointer = 1,
+  PointerDeviceKind kind = PointerDeviceKind.touch,
   double radiusMajor = 0.0,
   double radiusMinor = 0.0,
 }) {
@@ -84,6 +87,7 @@ PointerMoveEvent buildPointerMoveEvent({
     pointer: pointer,
     position: position,
     delta: delta,
+    kind: kind,
     pressure: pressure,
     pressureMin: pressureMin,
     pressureMax: pressureMax,
@@ -126,6 +130,7 @@ List<PointerMoveEvent> createSafePressureSequence({
         delta: const Offset(4, 0),
         timeStamp: Duration(milliseconds: i * 16),
         pointer: 1,
+        kind: PointerDeviceKind.stylus,
       ),
     );
   }

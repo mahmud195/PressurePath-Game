@@ -254,7 +254,7 @@ class _GameScreenState extends State<GameScreen>
     });
 
     // Pressure fail check with a short grace period.
-    if (reading.state == PressureState.tooStrong) {
+    if (!reading.isFallback && reading.state == PressureState.tooStrong) {
       _overThresholdSince ??= DateTime.now();
       final elapsed = DateTime.now()
           .difference(_overThresholdSince!)
