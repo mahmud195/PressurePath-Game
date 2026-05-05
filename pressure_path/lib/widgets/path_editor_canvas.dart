@@ -45,10 +45,16 @@ class _PathEditorCanvasState extends State<PathEditorCanvas> {
   }
 
   Future<void> _decodeImage() async {
-    final codec = await ui.instantiateImageCodec(widget.imageBytes);
-    final frame = await codec.getNextFrame();
-    if (mounted) {
-      setState(() => _bgImage = frame.image);
+    try {
+      final codec = await ui.instantiateImageCodec(widget.imageBytes);
+      final frame = await codec.getNextFrame();
+      if (mounted) {
+        setState(() => _bgImage = frame.image);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _bgImage = null);
+      }
     }
   }
 

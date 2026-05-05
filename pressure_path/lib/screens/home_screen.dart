@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import '../i18n/strings.dart';
 import '../theme/app_theme.dart';
-import 'game_screen.dart';
 import 'doctor_screen.dart';
 import 'image_capture_screen.dart';
+import 'pressure_calibration_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -219,10 +219,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           width: double.infinity,
                           child: ElevatedButton(
                             onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => const GameScreen()),
-                              );
+                              PressureCalibrationScreen.startGame(context);
                             },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.accent,
@@ -231,6 +228,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               shadowColor: AppColors.accent.withValues(alpha: 0.3),
                             ),
                             child: Text(I18n.t('playNow'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              PressureCalibrationScreen.startGame(
+                                context,
+                                forceCalibration: true,
+                              );
+                            },
+                            icon: const Icon(Icons.tune_rounded, size: 20),
+                            label: const Text('Pressure Setup'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.text,
+                              side: BorderSide(color: AppColors.accent.withValues(alpha: 0.4)),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
                           ),
                         ),
                         const SizedBox(height: 14),

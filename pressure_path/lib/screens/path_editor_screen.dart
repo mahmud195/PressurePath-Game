@@ -7,7 +7,7 @@ import '../services/edge_detection_service.dart';
 import '../services/path_simplifier.dart';
 import '../theme/app_theme.dart';
 import '../widgets/path_editor_canvas.dart';
-import 'game_screen.dart';
+import 'pressure_calibration_screen.dart';
 
 class PathEditorScreen extends StatefulWidget {
   final Uint8List imageBytes;
@@ -75,7 +75,7 @@ class _PathEditorScreenState extends State<PathEditorScreen> {
     super.dispose();
   }
 
-  void _onUseAsTrail() {
+  Future<void> _onUseAsTrail() async {
     if (_editorState.startMarker == null || _editorState.endMarker == null) return;
 
     // Merge all visible paths
@@ -101,9 +101,10 @@ class _PathEditorScreenState extends State<PathEditorScreen> {
       thumbnailBytes: widget.imageBytes,
     );
 
-    Navigator.pushReplacement(
+    await PressureCalibrationScreen.startGame(
       context,
-      MaterialPageRoute(builder: (_) => GameScreen(customTrail: trail)),
+      customTrail: trail,
+      replace: true,
     );
   }
 

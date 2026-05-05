@@ -1,9 +1,12 @@
-
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../i18n/strings.dart';
+import '../models/pressure_calibration.dart';
+import '../models/pressure_reading.dart';
 import '../models/trail_path.dart';
+import '../services/pressure_input_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/pressure_indicator.dart';
 
 class GameScreen extends StatefulWidget {
   final TrailPath? customTrail;
@@ -18,22 +21,32 @@ class GameScreen extends StatefulWidget {
 
 enum _GameState { picking, playing, failed, success }
 
-class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateMixin {
+class _GameScreenState extends State<GameScreen>
+    with SingleTickerProviderStateMixin {
   _GameState _state = _GameState.picking;
   String _selectedPath = 'wave';
   List<Offset> _pathPoints = [];
   final List<_TrailPoint> _userTrail = [];
   final List<double> _pressureHistory = [];
-  double _smoothPressure = 0;
+  final PressureInputService _pressureInput = PressureInputService();
+  PressureCalibration _pressureCalibration =
+      PressureCalibration.fallbackCalibration();
+  PressureReading _pressureReading = PressureReading.zero();
   int _attemptCount = 0;
   double _bestAvgPressure = double.infinity;
   bool _isDrawing = false;
   int _furthestIdx = 0;
-  final int _threshold = 65;
   DateTime? _sessionStart;
   bool _muted = false;
 
   Size _canvasSize = Size.zero;
+
+  // Track the "start hint" pulse animation
+  bool _showStartHint = true;
+
+  // Grace period: track how long pressure has been over threshold
+  DateTime? _overThresholdSince;
+  static const _failGraceMs = 320;
 
   @override
   void initState() {
@@ -41,6 +54,23 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (widget.customTrail != null) {
       _selectedPath = 'custom';
     }
+    _loadPressureCalibration();
+  }
+
+  Future<void> _loadPressureCalibration() async {
+    final saved = await PressureInputService.loadCalibration();
+    if (!mounted) return;
+    final effective = saved.isCalibrated
+        ? saved
+        : PressureCalibration.fallbackCalibration(
+            selectedDifficulty: saved.selectedDifficulty,
+          ).copyWith(sensitivityMultiplier: saved.sensitivityMultiplier);
+
+    _pressureInput.updateCalibration(effective);
+    setState(() {
+      _pressureCalibration = effective;
+      _pressureReading = PressureReading.zero(effective);
+    });
   }
 
   void _startPlaying() {
@@ -51,17 +81,23 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       _pressureHistory.clear();
       _furthestIdx = 0;
       _isDrawing = false;
-      _smoothPressure = 0;
+      _pressureInput.reset();
+      _pressureReading = PressureReading.zero(_pressureCalibration);
+      _showStartHint = true;
+      _overThresholdSince = null;
       _sessionStart = DateTime.now();
 
       if (widget.customTrail != null) {
         _pathPoints = widget.customTrail!.points;
       } else {
-        // Generate after layout
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_canvasSize != Size.zero) {
             setState(() {
-              final trail = TrailPath.fromType(_selectedPath, _canvasSize.width, _canvasSize.height);
+              final trail = TrailPath.fromType(
+                _selectedPath,
+                _canvasSize.width,
+                _canvasSize.height,
+              );
               _pathPoints = trail.points;
             });
           }
@@ -71,7 +107,12 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   void _triggerFail({String? reason}) {
-    setState(() => _state = _GameState.failed);
+    if (_state != _GameState.playing) return;
+    setState(() {
+      _state = _GameState.failed;
+      _isDrawing = false;
+      _overThresholdSince = null;
+    });
     final msgs = I18n.empathyMessages;
     final msg = msgs[Random().nextInt(msgs.length)];
     final fullMsg = reason != null ? '$reason\n$msg' : msg;
@@ -92,13 +133,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   void _triggerSuccess() {
+    if (_state != _GameState.playing) return;
     final avgP = _pressureHistory.isEmpty
         ? 0.0
         : _pressureHistory.reduce((a, b) => a + b) / _pressureHistory.length;
     if (avgP < _bestAvgPressure) _bestAvgPressure = avgP;
-    final elapsed = DateTime.now().difference(_sessionStart!).inMilliseconds / 1000;
+    final elapsed =
+        DateTime.now().difference(_sessionStart!).inMilliseconds / 1000;
 
-    setState(() => _state = _GameState.success);
+    setState(() {
+      _state = _GameState.success;
+      _isDrawing = false;
+    });
 
     showDialog(
       context: context,
@@ -106,14 +152,19 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: Text(I18n.t('successTitle'), textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
+        title: Text(
+          I18n.t('successTitle'),
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(I18n.t('successMsg'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.muted)),
+            Text(
+              I18n.t('successMsg'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted),
+            ),
             const SizedBox(height: 16),
             _ResultRow(I18n.t('totalAttempts'), '$_attemptCount'),
             _ResultRow(I18n.t('avgPressure'), '${avgP.round()}'),
@@ -142,8 +193,13 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   Color _trailColor(double p100) {
-    if (p100 < 40) return AppColors.trailGreen;
-    if (p100 < 65) return AppColors.trailYellow;
+    final adjusted = p100 / 100.0;
+    if (adjusted < _pressureCalibration.warningPressureThreshold) {
+      return AppColors.trailGreen;
+    }
+    if (adjusted < _pressureCalibration.failPressureThreshold) {
+      return AppColors.trailYellow;
+    }
     return AppColors.trailRed;
   }
 
@@ -151,41 +207,33 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (_state != _GameState.playing || _pathPoints.isEmpty) return;
     final pos = e.localPosition;
     final startPt = _pathPoints.first;
-    if ((pos - startPt).distance < 30) {
+
+    // Use a generous tap area: 50px or 8% of canvas width, whichever is larger
+    final startRadius = max(50.0, canvasSize.width * 0.08);
+
+    if ((pos - startPt).distance < startRadius) {
       setState(() {
         _isDrawing = true;
+        _showStartHint = false;
         _userTrail.clear();
         _furthestIdx = 0;
+        _overThresholdSince = null;
       });
     }
+
+    // Always update live pressure on touch
+    _updateLivePressure(e);
   }
 
   void _onPointerMove(PointerMoveEvent e, Size canvasSize) {
-    if (_state != _GameState.playing || !_isDrawing || _pathPoints.isEmpty) return;
+    if (_state != _GameState.playing || _pathPoints.isEmpty) return;
+
+    final reading = _updateLivePressure(e);
+
+    if (!_isDrawing) return;
 
     final pos = e.localPosition;
-    
-    // Check if device supports true hardware pressure
-    bool hasHardwarePressure = e.pressureMax > e.pressureMin;
-    double rawPressure = 0.0;
-
-    if (hasHardwarePressure) {
-      // Hardware supports pressure (e.g., Apple Pencil, some Android styluses/phones).
-      rawPressure = ((e.pressure - e.pressureMin) / (e.pressureMax - e.pressureMin)).clamp(0.0, 1.0);
-    } else {
-      // Hardware does NOT support true pressure. Fall back to touch area.
-      final area = e.radiusMinor * e.radiusMajor;
-      if (area > 0) {
-        // Typical finger area is around 100-300. As it presses harder, it flattens and area increases.
-        rawPressure = (area / 400).clamp(0.0, 1.0);
-      } else {
-        // Absolute fallback (e.g. basic touch on iOS Safari without size support).
-        rawPressure = 0.25;
-      }
-    }
-
-    _smoothPressure += (rawPressure * 100 - _smoothPressure) * 0.3;
-    final p100 = _smoothPressure;
+    final p100 = reading.percent;
     _pressureHistory.add(p100);
 
     // Find nearest point on path
@@ -205,10 +253,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       _userTrail.add(_TrailPoint(pos, p100, _trailColor(p100)));
     });
 
-    // Fail if pressure exceeds threshold
-    if (p100 >= _threshold) {
-      _triggerFail();
-      return;
+    // Pressure fail check with a short grace period.
+    if (reading.state == PressureState.tooStrong) {
+      _overThresholdSince ??= DateTime.now();
+      final elapsed = DateTime.now()
+          .difference(_overThresholdSince!)
+          .inMilliseconds;
+      if (elapsed >= _failGraceMs) {
+        _triggerFail();
+        return;
+      }
+    } else {
+      _overThresholdSince = null;
     }
 
     // Fail if went off the path
@@ -219,13 +275,31 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
     // Check if near end
     final endPt = _pathPoints.last;
-    if ((pos - endPt).distance < 25 && _furthestIdx > _pathPoints.length * 0.7) {
+    if ((pos - endPt).distance < 25 &&
+        _furthestIdx > _pathPoints.length * 0.7) {
       _triggerSuccess();
     }
   }
 
-  void _onPointerUp(PointerUpEvent e) {
+  void _onPointerUp(PointerUpEvent _) {
+    _endPointerGesture();
+  }
+
+  void _endPointerGesture() {
     _isDrawing = false;
+    _pressureInput.endGesture();
+    setState(() {
+      _pressureReading = PressureReading.zero(_pressureCalibration);
+    });
+  }
+
+  /// Update live pressure reading and gauge on every pointer event.
+  PressureReading _updateLivePressure(PointerEvent e) {
+    final reading = _pressureInput.read(e);
+    setState(() {
+      _pressureReading = reading;
+    });
+    return reading;
   }
 
   @override
@@ -244,7 +318,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             children: [
               // Header
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
                     _SmallIconBtn(
@@ -254,10 +331,20 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                     const Spacer(),
                     Column(
                       children: [
-                        Text('$_attemptCount',
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                        Text(I18n.t('attempts'),
-                            style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                        Text(
+                          '$_attemptCount',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          I18n.t('attempts'),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.muted,
+                          ),
+                        ),
                       ],
                     ),
                     const Spacer(),
@@ -305,9 +392,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
                       // Pressure gauge
                       const SizedBox(width: 8),
-                      _PressureGauge(
-                        pressure: _smoothPressure,
-                        threshold: _threshold.toDouble(),
+                      PressureIndicator(
+                        reading: _pressureReading,
+                        calibration: _pressureCalibration,
                       ),
                     ],
                   ),
@@ -323,86 +410,110 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   Widget _buildPathPicker() {
     final types = ['wave', 'zigzag', 'spiral'];
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (widget.customTrail == null) ...[
-            Text(I18n.t('choosePath'),
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: types.map((t) {
-                final selected = t == _selectedPath;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedPath = t),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 80,
-                    height: 80,
-                    margin: const EdgeInsets.symmetric(horizontal: 6),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: selected ? AppColors.accent : Colors.transparent,
-                        width: 2,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.customTrail == null) ...[
+              Text(
+                I18n.t('choosePath'),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: types.map((t) {
+                  final selected = t == _selectedPath;
+                  return GestureDetector(
+                    onTap: () => setState(() => _selectedPath = t),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: 80,
+                      height: 80,
+                      margin: const EdgeInsets.symmetric(horizontal: 6),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: selected
+                              ? AppColors.accent
+                              : Colors.transparent,
+                          width: 2,
+                        ),
+                        boxShadow: selected
+                            ? [
+                                BoxShadow(
+                                  color: AppColors.accent.withValues(
+                                    alpha: 0.3,
+                                  ),
+                                  blurRadius: 16,
+                                ),
+                              ]
+                            : null,
                       ),
-                      boxShadow: selected
-                          ? [BoxShadow(color: AppColors.accent.withValues(alpha: 0.3), blurRadius: 16)]
-                          : null,
+                      child: CustomPaint(painter: _PathPreviewPainter(t)),
                     ),
-                    child: CustomPaint(
-                      painter: _PathPreviewPainter(t),
-                    ),
-                  ),
-                );
-              }).toList(),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 24),
+            ],
+
+            Text(
+              I18n.t('precision'),
+              style: const TextStyle(fontSize: 14, color: AppColors.muted),
+            ),
+            SizedBox(
+              width: 200,
+              child: Slider(
+                value: GameScreen.globalTolerance,
+                min: 2,
+                max: 60,
+                activeColor: AppColors.accent,
+                onChanged: (v) =>
+                    setState(() => GameScreen.globalTolerance = v),
+              ),
+            ),
+            Text(
+              GameScreen.globalTolerance < 10
+                  ? I18n.t('strict')
+                  : GameScreen.globalTolerance > 45
+                  ? I18n.t('relaxed')
+                  : I18n.t('normal'),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 16),
+
+            Text(
+              I18n.t('thickness'),
+              style: const TextStyle(fontSize: 14, color: AppColors.muted),
+            ),
+            SizedBox(
+              width: 200,
+              child: Slider(
+                value: GameScreen.globalStrokeWidth,
+                min: 2,
+                max: 24,
+                activeColor: AppColors.trailYellow,
+                onChanged: (v) =>
+                    setState(() => GameScreen.globalStrokeWidth = v),
+              ),
+            ),
+            Text(
+              '${GameScreen.globalStrokeWidth.round()} px',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 24),
+
+            ElevatedButton(
+              onPressed: _startPlaying,
+              child: Text(I18n.t('startTrace')),
+            ),
           ],
-          
-          Text(I18n.t('precision'),
-              style: const TextStyle(fontSize: 14, color: AppColors.muted)),
-          SizedBox(
-            width: 200,
-            child: Slider(
-              value: GameScreen.globalTolerance,
-              min: 2,
-              max: 60,
-              activeColor: AppColors.accent,
-              onChanged: (v) => setState(() => GameScreen.globalTolerance = v),
-            ),
-          ),
-          Text(
-            GameScreen.globalTolerance < 10 ? I18n.t('strict') : GameScreen.globalTolerance > 45 ? I18n.t('relaxed') : I18n.t('normal'),
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 16),
-
-          Text(I18n.t('thickness'),
-              style: const TextStyle(fontSize: 14, color: AppColors.muted)),
-          SizedBox(
-            width: 200,
-            child: Slider(
-              value: GameScreen.globalStrokeWidth,
-              min: 2,
-              max: 24,
-              activeColor: AppColors.trailYellow,
-              onChanged: (v) => setState(() => GameScreen.globalStrokeWidth = v),
-            ),
-          ),
-          Text(
-            '${GameScreen.globalStrokeWidth.round()} px',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 24),
-
-          ElevatedButton(
-            onPressed: _startPlaying,
-            child: Text(I18n.t('startTrace')),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -413,26 +524,88 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
 
         // Generate path points if empty and we have a canvas size
-        if (_pathPoints.isEmpty && _canvasSize != Size.zero && widget.customTrail == null) {
+        if (_pathPoints.isEmpty &&
+            _canvasSize != Size.zero &&
+            widget.customTrail == null) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             setState(() {
-              final trail = TrailPath.fromType(_selectedPath, _canvasSize.width, _canvasSize.height);
+              final trail = TrailPath.fromType(
+                _selectedPath,
+                _canvasSize.width,
+                _canvasSize.height,
+              );
               _pathPoints = trail.points;
             });
           });
         }
 
-        return Listener(
-          onPointerDown: (e) => _onPointerDown(e, _canvasSize),
-          onPointerMove: (e) => _onPointerMove(e, _canvasSize),
-          onPointerUp: _onPointerUp,
-          child: CustomPaint(
-            size: _canvasSize,
-            painter: _GameCanvasPainter(
-              pathPoints: _pathPoints,
-              userTrail: _userTrail,
+        return Stack(
+          children: [
+            // Main interactive canvas
+            Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (e) => _onPointerDown(e, _canvasSize),
+              onPointerMove: (e) => _onPointerMove(e, _canvasSize),
+              onPointerUp: _onPointerUp,
+              onPointerCancel: (_) => _endPointerGesture(),
+              child: CustomPaint(
+                size: _canvasSize,
+                painter: _GameCanvasPainter(
+                  pathPoints: _pathPoints,
+                  userTrail: _userTrail,
+                  showStartHint: _showStartHint,
+                ),
+              ),
             ),
-          ),
+
+            // Sensor badge — bottom left
+            Positioned(
+              bottom: 8,
+              left: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _pressureReading.isFallback
+                      ? 'Safe Touch Mode'
+                      : I18n.t('sensorActive'),
+                  style: const TextStyle(fontSize: 10, color: AppColors.muted),
+                ),
+              ),
+            ),
+
+            // "Tap the green dot" hint for first-time
+            if (_showStartHint && _pathPoints.isNotEmpty)
+              Positioned(
+                top: 12,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      I18n.isArabic
+                          ? 'المس الدائرة الخضراء للبدء'
+                          : 'Touch the green dot to start',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );
@@ -449,8 +622,13 @@ class _TrailPoint {
 class _GameCanvasPainter extends CustomPainter {
   final List<Offset> pathPoints;
   final List<_TrailPoint> userTrail;
+  final bool showStartHint;
 
-  _GameCanvasPainter({required this.pathPoints, required this.userTrail});
+  _GameCanvasPainter({
+    required this.pathPoints,
+    required this.userTrail,
+    this.showStartHint = false,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -472,7 +650,7 @@ class _GameCanvasPainter extends CustomPainter {
     }
     canvas.drawPath(pathPath, glowPaint);
 
-    // Path line (dashed effect with dots)
+    // Path line
     final linePaint = Paint()
       ..color = const Color(0x59636AF1)
       ..strokeWidth = 6
@@ -481,23 +659,56 @@ class _GameCanvasPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
     canvas.drawPath(pathPath, linePaint);
 
-    // Start dot
-    final startPaint = Paint()..color = AppColors.success;
-    canvas.drawCircle(pathPoints.first, 10, startPaint);
+    // Start dot — larger pulsing circle when showing hint
+    final startCenter = pathPoints.first;
+    if (showStartHint) {
+      // Outer pulse ring
+      canvas.drawCircle(
+        startCenter,
+        22,
+        Paint()
+          ..color = AppColors.success.withValues(alpha: 0.2)
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        startCenter,
+        16,
+        Paint()
+          ..color = AppColors.success.withValues(alpha: 0.35)
+          ..style = PaintingStyle.fill,
+      );
+    }
+    canvas.drawCircle(startCenter, 12, Paint()..color = AppColors.success);
     final startText = TextPainter(
-      text: const TextSpan(text: 'S', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+      text: const TextSpan(
+        text: 'S',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
       textDirection: TextDirection.ltr,
     )..layout();
-    startText.paint(canvas, pathPoints.first - Offset(startText.width / 2, startText.height / 2));
+    startText.paint(
+      canvas,
+      startCenter - Offset(startText.width / 2, startText.height / 2),
+    );
 
     // End dot
-    final endPaint = Paint()..color = AppColors.accent;
-    canvas.drawCircle(pathPoints.last, 10, endPaint);
+    final endCenter = pathPoints.last;
+    canvas.drawCircle(endCenter, 12, Paint()..color = AppColors.accent);
     final endText = TextPainter(
-      text: const TextSpan(text: '★', style: TextStyle(color: Colors.white, fontSize: 10)),
+      text: const TextSpan(
+        text: '★',
+        style: TextStyle(color: Colors.white, fontSize: 11),
+      ),
       textDirection: TextDirection.ltr,
     )..layout();
-    endText.paint(canvas, pathPoints.last - Offset(endText.width / 2, endText.height / 2));
+    endText.paint(
+      canvas,
+      endCenter - Offset(endText.width / 2, endText.height / 2),
+    );
 
     // User trail
     for (int i = 1; i < userTrail.length; i++) {
@@ -513,7 +724,11 @@ class _GameCanvasPainter extends CustomPainter {
     // Cursor glow on last point
     if (userTrail.isNotEmpty) {
       final last = userTrail.last;
-      canvas.drawCircle(last.position, 8, Paint()..color = last.color.withValues(alpha: 0.27));
+      canvas.drawCircle(
+        last.position,
+        8,
+        Paint()..color = last.color.withValues(alpha: 0.27),
+      );
       canvas.drawCircle(last.position, 4, Paint()..color = last.color);
     }
   }
@@ -528,7 +743,12 @@ class _PathPreviewPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final trail = TrailPath.fromType(type, size.width, size.height, numPoints: 50);
+    final trail = TrailPath.fromType(
+      type,
+      size.width,
+      size.height,
+      numPoints: 50,
+    );
     if (trail.points.isEmpty) return;
 
     final paint = Paint()
@@ -547,90 +767,6 @@ class _PathPreviewPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _PressureGauge extends StatelessWidget {
-  final double pressure;
-  final double threshold;
-
-  const _PressureGauge({required this.pressure, required this.threshold});
-
-  @override
-  Widget build(BuildContext context) {
-    final pct = pressure.clamp(0, 100) / 100;
-    Color fillColor;
-    if (pressure < 40) {
-      fillColor = AppColors.trailGreen;
-    } else if (pressure < 65) {
-      fillColor = AppColors.trailYellow;
-    } else {
-      fillColor = AppColors.trailRed;
-    }
-
-    return SizedBox(
-      width: 36,
-      child: Column(
-        children: [
-          Text(
-            '${pressure.round()}',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Expanded(
-            child: Container(
-              width: 24,
-              decoration: BoxDecoration(
-                color: AppColors.bg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.card, width: 2),
-              ),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return Stack(
-                    alignment: Alignment.bottomCenter,
-                    children: [
-                      // Fill
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 80),
-                        width: double.infinity,
-                        height: constraints.maxHeight * pct,
-                        decoration: BoxDecoration(
-                          borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
-                          gradient: LinearGradient(
-                            begin: Alignment.bottomCenter,
-                            end: Alignment.topCenter,
-                            colors: [fillColor, fillColor],
-                          ),
-                        ),
-                      ),
-                      // Threshold line
-                      Positioned(
-                        bottom: constraints.maxHeight * (threshold / 100),
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          height: 2,
-                          color: AppColors.text.withValues(alpha: 0.7),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          RotatedBox(
-            quarterTurns: 3,
-            child: Text(
-              I18n.t('pressure'),
-              style: const TextStyle(fontSize: 10, color: AppColors.muted, letterSpacing: 1),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _SmallIconBtn extends StatelessWidget {
@@ -674,8 +810,14 @@ class _ResultRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 14)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+          Text(
+            label,
+            style: const TextStyle(color: AppColors.muted, fontSize: 14),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+          ),
         ],
       ),
     );
